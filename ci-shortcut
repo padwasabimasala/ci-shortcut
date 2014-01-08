@@ -33,7 +33,7 @@ create_app() {
     add_heroku_collaborator $app_name $c
   done
 
-  git push heroku master
+  git push $remote_name master
 }
 
 create_heroku_app() {
