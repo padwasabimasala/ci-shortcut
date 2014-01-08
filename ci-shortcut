@@ -1,0 +1,174 @@
+#!/bin/bash
+# == ABOUT ==
+# ci-shortcut is an opinionated way of getting a node app up quicking on circle-ci and heroku with pipelines
+#
+# It assumes that your app is in the cwd and the origin repo matches your app name.
+#
+# If your app origin is github:youruser/my-app.git the script will
+# 1. create the heroku app APP_PREFIX-my-app-prod
+# 2. create the heroku app APP_PREFIX-my-app-stage
+# 3. configure a pipeline from stage to prod
+# 4. create a circle.yml file that runs npm test and pushes to stage and then promotes stage to prod
+#
+# == CONF ==
+# Set these in ~/.ci-shortcutrc (or your env)
+# required HEROKU_API_KEY=""
+# optional APP_PREFIX=""     string e.g. "myco-"
+# optional COLLABORATORS=""  array  e.g. COLLABORATORS=(torvalds@example.com stallman@example.com)
+#
+# Use github issues/prs for support padwasabimasala/ci-shortcut.sh
+
+create_app() {
+  local app_name="$1"
+  local remote_name="$2"
+  local array=$3[@]
+  local collaborators=("${!array}")
+
+  create_heroku_app $app_name
+
+  git remote add $remote_name $(heroku_remote $app_name)
+
+  for c in ${collaborators[@]}; do
+    blue Adding collaborator $c to app $app_name
+    add_heroku_collaborator $app_name $c
+  done
+
+  git push heroku master
+}
+
+create_heroku_app() {
+  local app_name=$1
+  curl -n -v \
+    -H "Accept: application/vnd.heroku+json; version=3" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $HEROKU_API_KEY" \
+    -X POST https://api.heroku.com/apps \
+    -d "{\"name\":\"$app_name\"}"
+}
+
+add_heroku_collaborator() {
+  local app_name=$1
+  local collaborator=$2
+  curl -n -v \
+    -H "Accept: application/vnd.heroku+json; version=3" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $HEROKU_API_KEY" \
+    -X POST https://api.heroku.com/apps/$app_name/collaborators \
+    -d "{\"user\":\"$collaborator\"}"
+}
+
+delete_app() {
+  local app_name="$1"
+  local remote_name="$2"
+  delete_heroku_app $app_name
+  git remote remove $remote_name
+}
+
+delete_heroku_app() {
+  local app_name=$1
+  curl -n -v \
+    -H "Accept: application/vnd.heroku+json; version=3" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $HEROKU_API_KEY" \
+    -X DELETE https://api.heroku.com/apps/$app_name
+}
+
+create_ci_config() {
+  local app_name="$1"
+  write_circle_config $app_name
+  cat circle.yml
+  git add circle.yml
+  git commit circle.yml -m 'circle.yml'
+}
+
+write_circle_config() {
+  local app_name=$1
+  cat <<EOF > circle.yml
+machine:
+  pre:
+    - heroku plugins:install https://github.com/glenngillen/heroku-exit-status.git
+    - heroku plugins:install git://github.com/heroku/heroku-pipeline.git
+test:
+  override:
+    - npm test
+deployment:
+  production:
+    branch: master
+    commands:
+      - git push -q -f git@heroku.com:$app_name.git \$CIRCLE_SHA1:master
+      # Add integration/smoke tests here. If they exit >0 pipeline:promote will not be called
+      - heroku pipeline:promote -a $app_name
+EOF
+}
+
+function run {
+  local msg="$1"
+  shift
+  purple "$msg"
+  blue "$@"
+  eval "$@"
+  if test $? -ne 0; then
+    red "Error: with command \"$@\""
+    exit 1
+  fi
+}
+
+repo_name() {
+  # origin git@github.com:octanner/perf-auth.git (fetch) => perf-auth.git
+  local repo=$(git remote -v |grep -E '^origin.*(fetch)' |cut -d/ -f2 |cut -d' ' -f1)
+  # perf-auth.git => perf-auth
+  echo ${repo%.git}
+}
+
+app_name() {
+  echo $APP_PREFIX$(repo_name)
+}
+
+heroku_remote() {
+  echo git@heroku.com:$1.git
+}
+
+function purple {
+  echo "[35;40m$@[0m"
+}
+
+function blue {
+  echo "[36;40m$@[0m"
+}
+
+function red {
+  echo "[31;40m$@[0m"
+}
+
+function main() {
+  if test -f ~/.ci-shortcutrc; then
+    source ~/.ci-shortcutrc
+  fi
+
+  if test "x$HEROKU_API_KEY" == "x"; then
+    red "Error: HEROKU_API_KEY not set"
+    exit 1
+  fi
+
+  if test "x$(repo_name)" == "x"; then
+    red "Error: Could not determine application name. Check that $(pwd) is a git repo with remote origin."
+    exit 1
+  fi
+
+  local prod_app=$(app_name)-prod
+  local stage_app=$(app_name)-stage
+
+  purple "Setting up CircleCI and Heroku apps for $prod_app $stage_app"
+
+  if test $(heroku labs |grep -F '[+] pipelines' -c) -eq 0; then
+    run "Enabling pipelines" "heroku labs:enable pipelines && heroku plugins:install git://github.com/heroku/heroku-pipeline.git"
+  fi
+
+  run "Creating prod app" create_app $prod_app heroku COLLABORATORS
+  run "Creating stage app" create_app $stage_app stage COLLABORATORS
+  run "Creating stage to prod pipeline" heroku pipeline:add -a $stage_app $prod_app
+  run "Configuring CI" create_ci_config $stage_app
+  run "Pushing to master" git push
+}
+
+main "$@"
