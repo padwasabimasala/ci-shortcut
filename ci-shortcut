@@ -18,6 +18,31 @@
 #
 # Use github issues/prs for support padwasabimasala/ci-shortcut.sh
 
+function setup() {
+  if test "x$(repo_name)" == "x"; then
+    red "Error: Could not determine application name. Check that $(pwd) is a git repo with remote origin."
+    exit 1
+  fi
+
+  local dev_app=$(app_name)-dev
+  local stage_app=$(app_name)-stage
+  local prod_app=$(app_name)-prod
+
+  purple "Setting up CircleCI and Heroku apps for $prod_app $stage_app"
+
+  if test $(heroku labs |grep -F '[+] pipelines' -c) -eq 0; then
+    run "Enabling pipelines" "heroku labs:enable pipelines && heroku plugins:install git://github.com/heroku/heroku-pipeline.git"
+  fi
+
+  run "Creating dev app" create_app $dev_app dev COLLABORATORS
+  run "Creating stage app" create_app $stage_app stage COLLABORATORS
+  run "Creating prod app" create_app $prod_app heroku COLLABORATORS
+  run "Creating dev to stage pipeline" heroku pipeline:add -a $dev_app $stage_app
+  run "Creating stage to prod pipeline" heroku pipeline:add -a $stage_app $prod_app
+  run "Configuring CI" create_ci_config $stage_app
+  run "Pushing to master" git push
+}
+
 create_app() {
   local app_name="$1"
   local remote_name="$2"
@@ -153,28 +178,7 @@ function main() {
     exit 1
   fi
 
-  if test "x$(repo_name)" == "x"; then
-    red "Error: Could not determine application name. Check that $(pwd) is a git repo with remote origin."
-    exit 1
-  fi
-
-  local dev_app=$(app_name)-dev
-  local stage_app=$(app_name)-stage
-  local prod_app=$(app_name)-prod
-
-  purple "Setting up CircleCI and Heroku apps for $prod_app $stage_app"
-
-  if test $(heroku labs |grep -F '[+] pipelines' -c) -eq 0; then
-    run "Enabling pipelines" "heroku labs:enable pipelines && heroku plugins:install git://github.com/heroku/heroku-pipeline.git"
-  fi
-
-  run "Creating dev app" create_app $dev_app dev COLLABORATORS
-  run "Creating stage app" create_app $stage_app stage COLLABORATORS
-  run "Creating prod app" create_app $prod_app heroku COLLABORATORS
-  run "Creating dev to stage pipeline" heroku pipeline:add -a $dev_app $stage_app
-  run "Creating stage to prod pipeline" heroku pipeline:add -a $stage_app $prod_app
-  run "Configuring CI" create_ci_config $stage_app
-  run "Pushing to master" git push
+  setup
 }
 
 main "$@"
