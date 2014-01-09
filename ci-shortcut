@@ -7,8 +7,10 @@
 # If your app origin is github:youruser/my-app.git the script will
 # 1. create the heroku app APP_PREFIX-my-app-prod
 # 2. create the heroku app APP_PREFIX-my-app-stage
-# 3. configure a pipeline from stage to prod
-# 4. create a circle.yml file that runs npm test and pushes to stage and then promotes stage to prod
+# 3. create the heroku app APP_PREFIX-my-app-dev
+# 4. configure a pipeline from dev to stage
+# 5. configure a pipeline from stage to prod
+# 6. create a circle.yml file that runs npm test and pushes to stage and then promotes stage to prod
 #
 # == CONF ==
 # Set these in ~/.ci-shortcutrc (or your env)
